@@ -1,32 +1,193 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>New World — Daily Tracker</title>
-  <meta name="description" content="A tiny, offline-ready daily checklist that auto-resets at local midnight. All data stays in your browser.">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>New World — Daily Reset Tracker (3:00 JST)</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0b0f14;
-      --card: #121823;
-      --ink: #e9f0fa;
-      --muted: #a8b3c7;
-      --accent: #72b7ff;
-      --ok: #6dd3a6;
-      --warn: #ffb870;
-      --danger: #ff8a8a;
-      --ring: #2a3950;
-      --radius: 14px;
+      --bg: #0b0b0b;
+      --fg: #e5e7eb;
+      --muted: #9ca3af;
+      --card: rgba(17, 17, 17, 0.6);
+      --border: #1f2937;
+      --accent: #1f2937;
+      --accent-border: #374151;
+      --radius: 16px;
     }
-    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Noto Sans; background: var(--bg); color: var(--ink); }
-    .wrap { max-width: 920px; margin: 0 auto; padding: 28px 16px 80px; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Cinzel', serif;
+      color: var(--fg);
+      background: var(--bg);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 2rem; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+    h1 { font-size: clamp(1.5rem, 2.5vw, 2.25rem); margin: 0; letter-spacing: .5px; }
+    button {
+      padding: .6rem 1rem;
+      border-radius: 14px;
+      background: var(--accent);
+      color: var(--fg);
+      border: 1px solid var(--accent-border);
+      cursor: pointer;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      background: var(--card);
+      margin-top: 1rem;
+    }
+    .kicker { color: var(--muted); font-size: .95rem; }
+    .timer { font-size: clamp(2rem, 6vw, 3rem); margin: .4rem 0 .25rem; letter-spacing: .5px; }
+    .sub { color: var(--muted); font-size: .85rem; }
+    ul.tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+    .task { display: flex; align-items: center; gap: .5rem; }
+    input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
+    footer { color: var(--muted); font-size: .8rem; margin-top: 1rem; }
+    .row { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .small { font-size: .9rem; color: var(--muted); }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>New World — Daily Tracker</h1>
-    <p>If you see this rendered text, the page is loading correctly!</p>
-    <p>This file is fully ready for GitHub Pages. Upload it as <code>index.html</code> to your repo root and re-commit.</p>
+    <header>
+      <h1>New World — Daily Tracker</h1>
+      <button id="resetAllBtn" title="Uncheck all items (does not affect the 3:00 JST countdown)">Reset All</button>
+    </header>
+
+    <section class="card">
+      <div class="row">
+        <div>
+          <div class="kicker">Daily reset is fixed to</div>
+          <div>3:00 AM JST (UTC+9)</div>
+        </div>
+        <div class="small">Next reset (your local time): <span id="nextLocalStr">—</span></div>
+      </div>
+      <div id="countdown" class="timer">--h --m --s</div>
+      <div class="sub">The countdown is synced to 3:00 JST and is not affected by the Reset All button.</div>
+    </section>
+
+    <section class="card">
+      <h2 style="margin:.25rem 0 .75rem; font-size:1.25rem;">Daily Items</h2>
+      <ul class="tasks" id="taskList">
+        <!-- tasks rendered via JS -->
+      </ul>
+    </section>
+
+    <footer>Manual "Reset All" clears checkboxes only. Countdown continues to 3:00 JST.</footer>
   </div>
+
+  <script>
+    (function() {
+      const STORAGE_KEY = "nw_daily_tracker_checkboxes_v1_html";
+
+      const DEFAULT_TASKS = [
+        { id: "gypsum_orb", label: "Craft Gypsum Orbs" },
+        { id: "faction_quests", label: "Complete Faction Dailies" },
+        { id: "town_board", label: "Town Board / Bonuses" },
+        { id: "chest_route", label: "Chest Route (personal cooldowns)" },
+        { id: "expedition_bonus", label: "Expedition Bonus Rewards" }
+      ];
+
+      // Calculate next 3:00 AM JST epoch (ms) regardless of viewer timezone
+      function getNextJSTResetEpoch(nowMs = Date.now()) {
+        const JST_OFFSET_HOURS = 9;
+        const msPerHour = 60 * 60 * 1000;
+
+        // represent "now" in JST by shifting +9h
+        const nowJST = new Date(nowMs + JST_OFFSET_HOURS * msPerHour);
+
+        // today 03:00 in JST
+        const jst3 = new Date(
+          nowJST.getFullYear(), nowJST.getMonth(), nowJST.getDate(),
+          3, 0, 0, 0
+        );
+
+        const targetJST = (nowJST.getTime() >= jst3.getTime())
+          ? new Date(jst3.getTime() + 24 * msPerHour)  // tomorrow 03:00 JST
+          : jst3;                                      // today 03:00 JST (later today)
+
+        // convert back to UTC epoch by subtracting the +9h shift
+        return targetJST.getTime() - JST_OFFSET_HOURS * msPerHour;
+      }
+
+      function formatDuration(ms) {
+        if (ms < 0) ms = 0;
+        const total = Math.floor(ms / 1000);
+        const days = Math.floor(total / 86400);
+        const hours = Math.floor((total % 86400) / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const seconds = total % 60;
+        const parts = [];
+        if (days > 0) parts.push(days + "d");
+        parts.push(String(hours).padStart(2, "0") + "h");
+        parts.push(String(minutes).padStart(2, "0") + "m");
+        parts.push(String(seconds).padStart(2, "0") + "s");
+        return parts.join(" ");
+      }
+
+      // State
+      let checks = {};
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        checks = raw ? JSON.parse(raw) : {};
+      } catch (e) {
+        checks = {};
+      }
+
+      // Render tasks
+      const taskList = document.getElementById("taskList");
+      function renderTasks() {
+        taskList.innerHTML = "";
+        DEFAULT_TASKS.forEach(t => {
+          const li = document.createElement("li");
+          li.className = "task";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.id = t.id;
+          input.checked = !!checks[t.id];
+          input.addEventListener("change", () => {
+            checks[t.id] = !checks[t.id];
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(checks)); } catch {}
+          });
+          const label = document.createElement("label");
+          label.setAttribute("for", t.id);
+          label.textContent = t.label;
+          li.appendChild(input);
+          li.appendChild(label);
+          taskList.appendChild(li);
+        });
+      }
+      renderTasks();
+
+      // Reset All (does not affect countdown)
+      document.getElementById("resetAllBtn").addEventListener("click", () => {
+        checks = {};
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(checks)); } catch {}
+        renderTasks();
+      });
+
+      // Countdown loop
+      const countdownEl = document.getElementById("countdown");
+      const nextLocalStrEl = document.getElementById("nextLocalStr");
+
+      function updateCountdown() {
+        const now = Date.now();
+        const nextEpoch = getNextJSTResetEpoch(now);
+        const left = Math.max(0, nextEpoch - now);
+        countdownEl.textContent = formatDuration(left);
+        // show next reset time in user's local timezone
+        nextLocalStrEl.textContent = new Date(nextEpoch).toLocaleString();
+      }
+
+      updateCountdown();
+      setInterval(updateCountdown, 1000);
+    })();
+  </script>
 </body>
 </html>
